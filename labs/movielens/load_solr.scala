@@ -2,35 +2,35 @@ object LoadMovielensIntoSolr {
   val dataDir = "ml-100k"
 
   def main(args:Array[String]) {
-    sqlContext.udf.register("toInt", (str: String) => str.toInt)
+    
+    spark.udf.register("toInt", (str: String) => str.toInt)
 
-    var userDF = sqlContext.read.format("com.databricks.spark.csv")
+    var userDF = spark.read.format("com.databricks.spark.csv")
       .option("delimiter", "|").option("header", "false").load(s"${dataDir}/u.user")
     userDF.registerTempTable("user")
-    userDF = sqlContext.sql("select C0 as user_id,toInt(C1) as age,C2 as gender,C3 as occupation,C4 as zip_code from user")
+    userDF = spark.sql("select _c0 as user_id,toInt(_c1) as age,_c2 as gender,_c3 as occupation,_c4 as zip_code from user")
     var writeToSolrOpts = Map("collection" -> "users", "soft_commit_secs" -> "10")
     userDF.write.format("solr").options(writeToSolrOpts).save
 
-    var itemDF = sqlContext.read.format("com.databricks.spark.csv")
+    var itemDF = spark.read.format("com.databricks.spark.csv")
       .option("delimiter", "|").option("header", "false").load(s"${dataDir}/u.item")
     itemDF.registerTempTable("item")
 
     val selectMoviesSQL =
       """
-                            |   SELECT C0 as movie_id, C1 as title,
-                            |          C2 as release_date, C3 as video_release_date, C4 as imdb_url,
-                            |          C5 as genre_unknown, C6 as genre_action, C7 as genre_adventure,
-                            |          C8 as genre_animation, C9 as genre_children, C10 as genre_comedy,
-                            |          C11 as genre_crime, C12 as genre_documentary, C13 as genre_drama,
-                            |          C14 as genre_fantasy, C15 as genre_filmnoir, C16 as genre_horror,
-                            |          C17 as genre_musical, C18 as genre_mystery, C19 as genre_romance,
-                            |          C20 as genre_scifi, C21 as genre_thriller, C22 as genre_war,
-                            |          C23 as genre_western
+                            |   SELECT _c0 as movie_id, _c1 as title,
+                            |          _c2 as release_date, _c3 as video_release_date, _c4 as imdb_url,
+                            |          _c5 as genre_unknown, _c6 as genre_action, _c7 as genre_adventure,
+                            |          _c8 as genre_animation, _c9 as genre_children, _c10 as genre_comedy,
+                            |          _c11 as genre_crime, _c12 as genre_documentary, _c13 as genre_drama,
+                            |          _c14 as genre_fantasy, _c15 as genre_filmnoir, _c16 as genre_horror,
+                            |          _c17 as genre_musical, _c18 as genre_mystery, _c19 as genre_romance,
+                            |          _c20 as genre_scifi, _c21 as genre_thriller, _c22 as genre_war,
+                            |          _c23 as genre_western
                             |     FROM item
                           """.stripMargin
 
-    itemDF = sqlContext.sql(
-      selectMoviesSQL)
+    itemDF = spark.sql(selectMoviesSQL)
     itemDF.registerTempTable("item")
 
     val concatGenreListSQL =
@@ -43,8 +43,8 @@ object LoadMovielensIntoSolr {
                                |                  genre_thriller,genre_war,genre_western) as genre_list
                                |     FROM item
                              """.stripMargin
-    itemDF = sqlContext.sql(concatGenreListSQL) // build a multi-valued string field of genres for each movie
-    sqlContext.udf.register("genres", (genres: String) => {
+    itemDF = spark.sql(concatGenreListSQL) // build a multi-valued string field of genres for each movie
+    spark.udf.register("genres", (genres: String) => {
       var list = scala.collection.mutable.ListBuffer.empty[String]
       var arr = genres.toCharArray
       val g = List("unknown","action","adventure","animation","children",
@@ -58,35 +58,35 @@ object LoadMovielensIntoSolr {
       list
     })
     itemDF.registerTempTable("item")
-    itemDF = sqlContext.sql("select *, genres(genre_list) as genre from item")
+    itemDF = spark.sql("select *, genres(genre_list) as genre from item")
     itemDF = itemDF.drop("genre_list")
 
     // join with omdb metadata to get plot and actors
-    sqlContext.udf.register("str2list", (str: String) => {
+    spark.udf.register("str2list", (str: String) => {
       str.replace(", ", ",").split(",").toList
     })
-    var omdbDF = sqlContext.read.json(s"${dataDir}/omdb_movies.json")
+    var omdbDF = spark.read.json(s"${dataDir}/omdb_movies.json")
     omdbDF.registerTempTable("omdb")
-    omdbDF = sqlContext.sql("select movie_id, title, year, plot as plot_txt_en, str2list(actors) as actor, str2list(director) as director, str2list(language) as language, rated from omdb")
+    omdbDF = spark.sql("select movie_id, title, year, plot as plot_txt_en, str2list(actors) as actor, str2list(director) as director, str2list(language) as language, rated from omdb")
     omdbDF.registerTempTable("omdb2")
 
     itemDF.registerTempTable("movies")
-    var moviesDF = sqlContext.sql("select m.*, o.year, o.actor, o.director, o.language, o.rated, o.plot_txt_en from movies m left outer join omdb2 o on m.movie_id = o.movie_id")
+    var moviesDF = spark.sql("select m.*, o.year, o.actor, o.director, o.language, o.rated, o.plot_txt_en from movies m left outer join omdb2 o on m.movie_id = o.movie_id")
     writeToSolrOpts = Map("collection" -> "movies", "soft_commit_secs" -> "10")
     moviesDF.write.format("solr").options(writeToSolrOpts).save
 
-    sqlContext.udf.register("secs2ts", (secs: Long) => new java.sql.Timestamp(secs*1000))
+    spark.udf.register("secs2ts", (secs: Long) => new java.sql.Timestamp(secs*1000))
 
-    var ratingDF = sqlContext.read.format("com.databricks.spark.csv")
+    var ratingDF = spark.read.format("com.databricks.spark.csv")
       .option("delimiter","\t").option("header", "false").load(s"${dataDir}/u.data")
     ratingDF.registerTempTable("rating")
-    ratingDF = sqlContext.sql("select C0 as user_id, C1 as movie_id, toInt(C2) as rating, secs2ts(C3) as rating_timestamp from rating")
+    ratingDF = spark.sql("select _c0 as user_id, _c1 as movie_id, toInt(_c2) as rating, secs2ts(_c3) as rating_timestamp from rating")
     writeToSolrOpts = Map("collection" -> "ratings", "soft_commit_secs" -> "10")
     ratingDF.write.format("solr").options(writeToSolrOpts).save
 
-    var zipDF = sqlContext.read.format("com.databricks.spark.csv").option("header", "true").option("delimiter",",").load(s"${dataDir}/us_postal_codes.csv")
+    var zipDF = spark.read.format("com.databricks.spark.csv").option("header", "true").option("delimiter",",").load(s"${dataDir}/us_postal_codes.csv")
     zipDF.registerTempTable("us_postal_codes")
-    zipDF = sqlContext.sql("select `Postal Code` as zip_code, `Place Name` as place_name, `State` as state, `State Abbreviation` as state_abbrv, `County` as county,`Latitude` as latitude,`Longitude` as longitude, CONCAT(Latitude,',',Longitude) as geo_point, CONCAT(Latitude,',',Longitude) as geo_location, CONCAT(Latitude,',',Longitude) as geo_location_rpt from us_postal_codes")
+    zipDF = spark.sql("select `Postal Code` as zip_code, `Place Name` as place_name, `State` as state, `State Abbreviation` as state_abbrv, `County` as county,`Latitude` as latitude,`Longitude` as longitude, CONCAT(Latitude,',',Longitude) as geo_point, CONCAT(Latitude,',',Longitude) as geo_location, CONCAT(Latitude,',',Longitude) as geo_location_rpt from us_postal_codes")
     zipDF = zipDF.filter("latitude >= -90 AND latitude <= 90 AND longitude >= -180 AND longitude <= 180")
     zipDF.write.format("solr").options(Map("collection" -> "zipcodes")).save
   }
